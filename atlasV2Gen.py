@@ -2,268 +2,162 @@ import numpy as np
 import math
 import sys
 
-# Assuming you used the stock model with 49 Rings, 
-# just change the value after each ring number to 
-# match the number of LEDs in that ring
+# ==========================================
+# --- CONFIGURATION START ---
+# ==========================================
 
-rings = { 1: 32,
-          2: 54,
-          3: 71,
-          4: 82,
-          5: 90,
-          6: 99,
-          7: 107,
-          8: 113,
-          9: 119,
-          10: 125,
-          11: 129,
-          12: 133,
-          13: 136,
-          14: 140,
-          15: 143,
-          16: 146,
-          17: 148,
-          18: 151,
-          19: 154,
-          20: 154,
-          21: 155,
-          22: 157,
-          23: 158,
-          24: 158,
-          25: 158,
-          26: 158,
-          27: 157,
-          28: 156,
-          29: 155,
-          30: 154,
-          31: 153,
-          32: 151,
-          33: 147,
-          34: 147,
-          35: 143,
-          36: 140,
-          37: 137,
-          38: 133,
-          39: 129,
-          40: 124,
-          41: 119,
-          42: 113,
-          43: 107,
-          44: 99,
-          45: 91,
-          46: 81,
-          47: 70,
-          48: 55,
-          49: 32
-          }
+# 1. Ring Configuration
+# Format: Ring_Number: (LED_Count, Reverse_Direction)
+# If Reverse_Direction is True, the ring is wired backwards (Zigzag / Right-to-Left).
+# If Reverse_Direction is False, the ring is wired normally (Left-to-Right).
 
-# totalSize is the number of columns in the "screen"
-# Should match the value in startString
-totalSize = 1000
+rings_config = {
+    1:  (53, False),  # Ring 1
+    2:  (59, True),   # Ring 2 (Reversed example)
+    3:  (65, False),  # Ring 3
+    4:  (69, True),   # Ring 4
+    5:  (71, False),
+    6:  (73, True),
+    7:  (75, False),
+    8:  (77, True),
+    9:  (79, False),
+    10: (81, True),
+    11: (79, False),  # From here onwards, you can set specific directions
+    12: (77, True),
+    13: (75, False),
+    14: (73, True),
+    15: (71, False),
+    16: (69, True),
+    17: (65, False),
+    18: (59, True),
+    19: (53, False),
+    20: (45, True),
+    21: (35, False),
+    22: (19, True)
+}
 
-ports = 16
+# 2. Global Vertical Flip
+# Set to True if you want to flip the entire model upside down.
+# (e.g., if Ring 1 is physically at the bottom).
+flip_output_vertically = True
 
-def generate_ring(startCount, number, totalSize):
+# 3. Grid Resolution
+# 500 is the recommended balance between precision and editor visibility.
+totalSize = 500
+
+# ==========================================
+# --- CONFIGURATION END ---
+# ==========================================
+
+def generate_ring_string(start_channel, pixel_count, grid_width, is_reversed=False):
     """
-    Generates a comma-separated list with the specified properties.
-
-    Args:
-        startCount: The first LED in the ring.
-        number: The total number of LEDs in the ring.
-        totalSize: The size of the "display" to spread the LEDs across.
-
-    Returns:
-        The generated list as a comma separated string of integers.
+    Generates the comma-separated string for xLights with improved precision.
     """
+    # Safety check
+    if pixel_count > grid_width:
+        print(f"ERROR: Ring with {pixel_count} LEDs is larger than totalSize {grid_width}.")
+        sys.exit()
 
-    result = [""] * totalSize
-    result[0] = startCount
-    result[-1] = startCount + number - 1
-
-    # Calculate the step size for evenly spacing the numbers (rounding up)
-    step = int((totalSize - 2) / (number - 2))
-    array = np.linspace(0, totalSize-1, endpoint=False, num=number-1)
-    counter = 0
-    for i in array:
-        # Math.ceil is used to convert the float to an int, opting to round up
-        result[math.ceil(i)] = startCount + counter
-        counter = counter + 1
-    return ",".join(map(str, result))  # Convert to comma-separated string
-
-
-# This code was found on stackoverflow here: https://stackoverflow.com/questions/35517051/split-a-list-of-numbers-into-n-chunks-such-that-the-chunks-have-close-to-equal
-# Splitting into roughly equal lists was not easy!
-def partition_list(a, k):
-    """
-    Partitions a list of numbers into equal groupings by sum
+    result = [""] * grid_width
     
-    Args:
-        a: the list to partition
-        k: the number of partitions
-    This code was found on stackoverflow here: https://stackoverflow.com/questions/35517051/split-a-list-of-numbers-into-n-chunks-such-that-the-chunks-have-close-to-equal
+    # NEW LOGIC:
+    # 1. Generate exact decimal positions from 0 to (width - 1)
+    #    endpoint=True ensures the first pixel is exactly at the start and the last at the end.
+    exact_positions = np.linspace(0, grid_width - 1, num=pixel_count, endpoint=True)
     
-    Splitting into roughly equal lists was not easy!
-    """
-    #check degenerate conditions
-    if k <= 1: return [a]
-    if k >= len(a): return [[x] for x in a]
-    #create a list of indexes to partition between, using the index on the
-    #left of the partition to indicate where to partition
-    #to start, roughly partition the array into equal groups of len(a)/k (note
-    #that the last group may be a different size) 
-    partition_between = []
-    for i in range(k-1):
-        partition_between.append((i+1)*len(a)//k)  # Note I did change the code to // to avoid floats
-    #the ideal size for all partitions is the total height of the list divided
-    #by the number of paritions
-    average_height = float(sum(a))/k
-    best_score = None
-    best_partitions = None
-    count = 0
-    no_improvements_count = 0
-    #loop over possible partitionings
-    while True:
-        #partition the list
-        partitions = []
-        index = 0
-        for div in partition_between:
-            #create partitions based on partition_between
-            partitions.append(a[index:div])
-            index = div
-        #append the last partition, which runs from the last partition divider
-        #to the end of the list
-        partitions.append(a[index:])
-        #evaluate the partitioning
-        worst_height_diff = 0
-        worst_partition_index = -1
-        for p in partitions:
-            #compare the partition height to the ideal partition height
-            height_diff = average_height - sum(p)
-            #if it's the worst partition we've seen, update the variables that
-            #track that
-            if abs(height_diff) > abs(worst_height_diff):
-                worst_height_diff = height_diff
-                worst_partition_index = partitions.index(p)
-        #if the worst partition from this run is still better than anything
-        #we saw in previous iterations, update our best-ever variables
-        if best_score is None or abs(worst_height_diff) < best_score:
-            best_score = abs(worst_height_diff)
-            best_partitions = partitions
-            no_improvements_count = 0
-        else:
-            no_improvements_count += 1
-        #decide if we're done: if all our partition heights are ideal, or if
-        #we haven't seen improvement in >5 iterations, or we've tried 100
-        #different partitionings
-        #the criteria to exit are important for getting a good result with
-        #complex data, and changing them is a good way to experiment with getting
-        #improved results
-        if worst_height_diff == 0 or no_improvements_count > 10 or count > 100:
-            return best_partitions
-        count += 1
-        #adjust the partitioning of the worst partition to move it closer to the
-        #ideal size. the overall goal is to take the worst partition and adjust
-        #its size to try and make its height closer to the ideal. generally, if
-        #the worst partition is too big, we want to shrink the worst partition
-        #by moving one of its ends into the smaller of the two neighboring
-        #partitions. if the worst partition is too small, we want to grow the
-        #partition by expanding the partition towards the larger of the two
-        #neighboring partitions
-        if worst_partition_index == 0:   #the worst partition is the first one
-            if worst_height_diff < 0: partition_between[0] -= 1   #partition too big, so make it smaller
-            else: partition_between[0] += 1   #partition too small, so make it bigger
-        elif worst_partition_index == len(partitions)-1: #the worst partition is the last one
-            if worst_height_diff < 0: partition_between[-1] += 1   #partition too small, so make it bigger
-            else: partition_between[-1] -= 1   #partition too big, so make it smaller
-        else:   #the worst partition is in the middle somewhere
-            left_bound = worst_partition_index - 1   #the divider before the partition
-            right_bound = worst_partition_index   #the divider after the partition
-            if worst_height_diff < 0:   #partition too big, so make it smaller
-                if sum(partitions[worst_partition_index-1]) > sum(partitions[worst_partition_index+1]):   #the partition on the left is bigger than the one on the right, so make the one on the right bigger
-                    partition_between[right_bound] -= 1
-                else:   #the partition on the left is smaller than the one on the right, so make the one on the left bigger
-                    partition_between[left_bound] += 1
-            else:   #partition too small, make it bigger
-                if sum(partitions[worst_partition_index-1]) > sum(partitions[worst_partition_index+1]): #the partition on the left is bigger than the one on the right, so make the one on the left smaller
-                    partition_between[left_bound] -= 1
-                else:   #the partition on the left is smaller than the one on the right, so make the one on the right smaller
-                    partition_between[right_bound] += 1
+    current_channel = 0
+    
+    for pos in exact_positions:
+        # 2. Use standard rounding (round) instead of ceiling (ceil)
+        #    This ensures "Nearest Neighbor" precision.
+        idx = int(round(pos))
+        
+        # Index overflow protection (just in case)
+        if idx >= grid_width:
+            idx = grid_width - 1
+            
+        result[idx] = start_channel + current_channel
+        current_channel += 1
+        
+    if is_reversed:
+        result.reverse()
+        
+    return ",".join(map(str, result))
 
 
-led = 1     
-sphere = []
+# --- MAIN PROCESSING ---
 
-for num in range(0, len(rings)):
-    ring_list = generate_ring(led, rings[num+1], totalSize)
-    led = led + rings[num+1]
-    sphere.append(ring_list)
+current_led = 1
+sphere_rows = []
+
+# Iterate through rings in order (1 to 22)
+for ring_num in sorted(rings_config.keys()):
+    count, is_reversed = rings_config[ring_num]
+    
+    # Generate the string for this ring
+    row_string = generate_ring_string(current_led, count, totalSize, is_reversed)
+    
+    # Add to our list of rows
+    sphere_rows.append(row_string)
+    
+    # Increment channel counter
+    current_led += count
+
+
+# --- HANDLE GLOBAL FLIP ---
+if flip_output_vertically:
+    sphere_rows.reverse()
+
+
+# --- WRITE XMODEL FILE ---
 
 orig_stdout = sys.stdout
-f = open('atlas_v2.xmodel', 'w')
-sys.stdout = f
-# Print out the strings for the beginning of the xmodel file    
-print('<?xml version="1.0" encoding="UTF-8"?>')
-print('<custommodel ')
-
-startString = 'name="Atlas v2" parm1="1000" parm2="49" Depth="1" StringType="GRB Nodes" Transparency="0" PixelSize="2" ModelBrightness="0" Antialias="1" StrandNames="" NodeNames="" CustomModel="'
-endString = '" SourceVersion="2023.20"  >'
-
-print(startString + ";".join(sphere) + endString)
-print('</custommodel>')
-
-sys.stdout = orig_stdout
-f.close()
-
-
-
-
-
-groups = partition_list(list(rings.values()), ports)
-
-group_assignment = {}
-
-ring = 1
-for group_idx, group in enumerate(groups, 1):  # 1-based indexing
-    for ring_num in group:
-        group_assignment[ring] = group_idx
-        ring = ring +1
+try:
+    with open('atlas_v2.xmodel', 'w') as f:
+        sys.stdout = f
         
+        print('<?xml version="1.0" encoding="UTF-8"?>')
+        print('<custommodel ')
         
-led = 1
-group = 1
-groupStart = True
-groupStartLED = 1
-groupTotal = 0
-dcEndTotal = 0
+        # Dynamic header generation
+        header = (f'name="Atlas v2" parm1="{totalSize}" parm2="{len(rings_config)}" '
+                  f'Depth="1" StringType="GRB Nodes" Transparency="0" PixelSize="2" '
+                  f'ModelBrightness="0" Antialias="1" StrandNames="" NodeNames="" CustomModel="')
+        
+        footer = '" SourceVersion="2023.20"  >'
+        
+        # Join all rows with semicolons
+        print(header + ";".join(sphere_rows) + footer)
+        print('</custommodel>')
+        
+finally:
+    sys.stdout = orig_stdout
+    print("xModel file created successfully.")
 
-orig_stdout = sys.stdout
-f = open('atlas_v2.csv', 'w')
-sys.stdout = f
 
-print("Ring,LED Start,LED End,LEDs Per Ring,DataChannel,DC Start,DC End,DC Total, PC Start, PC End")
-for ring in rings:
-    dc = ""
-    dcStart = ""
-    powerStart = ""
-    pcEnd = ""
-    dcTotal = ""
-    dcEnd = ""
-    groupTotal = groupTotal + rings[ring]
-    if group_assignment[ring] == group and groupStart:
-        dc = group
-        dcStart = led
-        powerStart = group   
-        groupStart = False        
-    elif group_assignment.get(ring+1, ports+1) != group:
-        pcEnd = group
-        dcEnd = groupStartLED + groupTotal
-        dcTotal = groupTotal
-        dcEndTotal = dcEndTotal + groupTotal
-        dcEnd = dcEndTotal
-        groupStart = True
-        group = group + 1
-        groupTotal = 0
-    print(f"{ring},{led},{led+rings[ring]-1},{rings[ring]},{dc},{dcStart},{dcEnd},{dcTotal},{dc},{pcEnd}")
-    led = led + rings[ring]
-sys.stdout = orig_stdout
-f.close()
+# --- WRITE CSV SUMMARY ---
+
+try:
+    with open('atlas_v2.csv', 'w') as f:
+        sys.stdout = f
+        
+        print("Ring,Direction,LED Count,Start Channel,End Channel")
+        
+        # Reset counter for CSV reporting logic to match the generation order
+        # Note: If flipped vertically, the physical order might look different,
+        # but here we list them by Ring ID logic.
+        
+        report_led = 1
+        for ring_num in sorted(rings_config.keys()):
+            count, is_reversed = rings_config[ring_num]
+            
+            direction_str = "Reverse ( <--- )" if is_reversed else "Normal ( ---> )"
+            end_led = report_led + count - 1
+            
+            print(f"{ring_num},{direction_str},{count},{report_led},{end_led}")
+            
+            report_led += count
+
+finally:
+    sys.stdout = orig_stdout
+    print("CSV file created successfully.")
