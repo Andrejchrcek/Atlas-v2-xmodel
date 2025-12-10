@@ -3,26 +3,21 @@ import math
 import sys
 
 # ==========================================
-# --- CONFIGURATION START ---
+# --- CONFIGURATION ---
 # ==========================================
 
-# 1. Ring Configuration
-# Format: Ring_Number: (LED_Count, Reverse_Direction)
-# If Reverse_Direction is True, the ring is wired backwards (Zigzag / Right-to-Left).
-# If Reverse_Direction is False, the ring is wired normally (Left-to-Right).
-
 rings_config = {
-    1:  (53, False),  # Ring 1
-    2:  (59, True),   # Ring 2 (Reversed example)
-    3:  (65, False),  # Ring 3
-    4:  (69, True),   # Ring 4
+    1:  (53, False),
+    2:  (59, True),
+    3:  (65, False),
+    4:  (69, True),
     5:  (71, False),
     6:  (73, True),
     7:  (75, False),
     8:  (77, True),
     9:  (79, False),
-    10: (81, True),
-    11: (79, False),  # From here onwards, you can set specific directions
+    10: (81, True),  # Widest ring (Equator)
+    11: (79, False),
     12: (77, True),
     13: (75, False),
     14: (73, True),
@@ -36,128 +31,221 @@ rings_config = {
     22: (19, True)
 }
 
-# 2. Global Vertical Flip
-# Set to True if you want to flip the entire model upside down.
-# (e.g., if Ring 1 is physically at the bottom).
-flip_output_vertically = True
+# Setting: Ring 1 is physically at the BOTTOM
+# True = Ring 1 at bottom (bottom of sphere)
+# False = Ring 1 at top (top of sphere)
+FLIP_VERTICALLY = True
 
-# 3. Grid Resolution
-# 500 is the recommended balance between precision and editor visibility.
-totalSize = 500
+# 3D Grid Resolution
+# 120 provides enough buffer if the model is taller than it is wide.
+GRID_SIZE = 120
+
+# 2D Matrix Width (for the 2D xmodel file)
+MATRIX_WIDTH = 500
 
 # ==========================================
-# --- CONFIGURATION END ---
+# --- CALCULATION LOGIC ---
 # ==========================================
 
-def generate_ring_string(start_channel, pixel_count, grid_width, is_reversed=False):
-    """
-    Generates the comma-separated string for xLights with improved precision.
-    """
-    # Safety check
-    if pixel_count > grid_width:
-        print(f"ERROR: Ring with {pixel_count} LEDs is larger than totalSize {grid_width}.")
-        sys.exit()
+def get_max_leds(rings):
+    """Finds the maximum number of LEDs in a single ring."""
+    return max(count for count, _ in rings.values())
 
-    result = [""] * grid_width
+def calculate_physically_accurate_positions(rings, grid_size, do_flip):
+    """
+    Calculates 3D positions so that the vertical spacing between rings
+    is equal to the horizontal spacing between LEDs (1:1 aspect ratio).
+    """
+    positions = {}
+    current_channel = 1
     
-    # NEW LOGIC:
-    # 1. Generate exact decimal positions from 0 to (width - 1)
-    #    endpoint=True ensures the first pixel is exactly at the start and the last at the end.
-    exact_positions = np.linspace(0, grid_width - 1, num=pixel_count, endpoint=True)
+    max_leds = get_max_leds(rings)
+    total_rings = len(rings)
+    sorted_rings = sorted(rings.keys())
     
-    current_channel = 0
+    # 1. Define Scale
+    # How many voxels does the radius of the widest ring occupy?
+    # Leave some padding on the sides (e.g., 10%)
+    padding = grid_size * 0.1
+    usable_radius = (grid_size / 2) - padding
+    center = grid_size / 2
     
-    for pos in exact_positions:
-        # 2. Use standard rounding (round) instead of ceiling (ceil)
-        #    This ensures "Nearest Neighbor" precision.
-        idx = int(round(pos))
+    # MATH:
+    # Circumference of largest ring = max_leds * (led_pitch)
+    # Radius = Circumference / 2pi
+    # Therefore: Radius_in_LED_units = max_leds / (2 * pi)
+    
+    radius_in_led_units = max_leds / (2 * math.pi)
+    
+    # Key conversion: How many voxels equal one "LED pitch"?
+    voxels_per_led_pitch = usable_radius / radius_in_led_units
+    
+    # Now we know the distance between rings must be exactly 'voxels_per_led_pitch'
+    vertical_step = voxels_per_led_pitch
+    
+    # 2. Calculate total model height
+    total_height_voxels = (total_rings - 1) * vertical_step
+    
+    # Check if it fits in the grid height
+    if total_height_voxels > (grid_size - 2):
+        print(f"WARNING: Model is too tall ({total_height_voxels:.1f} voxels). Increase GRID_SIZE!")
+    
+    # Center the model vertically
+    start_y = (grid_size - total_height_voxels) / 2
+    
+    # 3. Generate positions
+    for i, ring_num in enumerate(sorted_rings):
+        count, is_reversed = rings[ring_num]
         
-        # Index overflow protection (just in case)
-        if idx >= grid_width:
-            idx = grid_width - 1
+        # --- HEIGHT (Y) ---
+        # If FLIP=True (Ring 1 at bottom):
+        # Ring 1 (i=0) will have the largest Y (in xLights voxel logic, high Y is bottom)
+        # Note: In xLights voxel logic, index 0 is TOP and index Max is BOTTOM.
+        
+        if do_flip:
+            # Ring 1 (i=0) is bottom -> Y = start_y + total_height
+            # Ring 22 is top -> Y = start_y
+            grid_y = (start_y + total_height_voxels) - (i * vertical_step)
+        else:
+            # Ring 1 is top -> Y = start_y
+            grid_y = start_y + (i * vertical_step)
             
-        result[idx] = start_channel + current_channel
-        current_channel += 1
+        # --- WIDTH (Radius) ---
+        # Radius of this ring relative to the largest one
+        current_radius_led_units = count / (2 * math.pi)
+        current_radius_voxels = current_radius_led_units * voxels_per_led_pitch
         
-    if is_reversed:
-        result.reverse()
+        # Generate points around circumference
+        thetas = np.linspace(0, 2 * math.pi, num=count, endpoint=False)
         
-    return ",".join(map(str, result))
+        # Zigzag logic
+        pixel_indices = list(range(count))
+        if is_reversed:
+            pixel_indices.reverse()
+            
+        for p_idx, theta in enumerate(thetas):
+            # X, Z coordinates
+            raw_x = current_radius_voxels * math.cos(theta)
+            raw_z = current_radius_voxels * math.sin(theta)
+            
+            grid_x = int(round(center + raw_x))
+            grid_z = int(round(center + raw_z))
+            final_y = int(round(grid_y))
+            
+            # Clamp to grid boundaries
+            grid_x = max(0, min(grid_size - 1, grid_x))
+            final_y = max(0, min(grid_size - 1, final_y))
+            grid_z = max(0, min(grid_size - 1, grid_z))
+            
+            ch_offset = pixel_indices[p_idx]
+            positions[(grid_x, final_y, grid_z)] = current_channel + ch_offset
+            
+        current_channel += count
+        
+    return positions
 
+def generate_voxel_string(positions, size):
+    planes = []
+    for z in range(size):
+        rows = []
+        for y in range(size):
+            cols = []
+            for x in range(size):
+                val = positions.get((x, y, z), "")
+                cols.append(str(val))
+            rows.append(",".join(cols))
+        planes.append(";".join(rows))
+    return "|".join(planes)
 
-# --- MAIN PROCESSING ---
-
-current_led = 1
-sphere_rows = []
-
-# Iterate through rings in order (1 to 22)
-for ring_num in sorted(rings_config.keys()):
-    count, is_reversed = rings_config[ring_num]
+def generate_2d_matrix(rings, width, do_flip):
+    rows = []
+    current_ch = 1
+    sorted_rings = sorted(rings.keys())
+    for r in sorted_rings:
+        count, is_rev = rings[r]
+        row_arr = [""] * width
+        locs = np.linspace(0, width-1, num=count, endpoint=True)
+        for i, pos in enumerate(locs):
+            idx = int(round(pos))
+            if idx >= width: idx = width-1
+            row_arr[idx] = str(current_ch + i)
+        if is_rev:
+            row_arr.reverse()
+        rows.append(",".join(row_arr))
+        current_ch += count
     
-    # Generate the string for this ring
-    row_string = generate_ring_string(current_led, count, totalSize, is_reversed)
-    
-    # Add to our list of rows
-    sphere_rows.append(row_string)
-    
-    # Increment channel counter
-    current_led += count
+    # If Flip is enabled, reverse the 2D rows so Ring 1 is at the bottom visually
+    if do_flip:
+        rows.reverse()
+    return ";".join(rows)
 
+# ==========================================
+# --- GENERATION ---
+# ==========================================
 
-# --- HANDLE GLOBAL FLIP ---
-if flip_output_vertically:
-    sphere_rows.reverse()
+print("1. Calculating 3D positions (1:1 Spacing)...")
+led_map_3d = calculate_physically_accurate_positions(rings_config, GRID_SIZE, FLIP_VERTICALLY)
+voxel_data = generate_voxel_string(led_map_3d, GRID_SIZE)
 
+print("2. Generating 2D Matrix...")
+matrix_data = generate_2d_matrix(rings_config, MATRIX_WIDTH, FLIP_VERTICALLY)
 
-# --- WRITE XMODEL FILE ---
+# FILE 1: 3D VOXEL
+xml_3d = f"""<?xml version="1.0" encoding="UTF-8"?>
+<custommodel 
+name="Atlas v2 3D" 
+parm1="{GRID_SIZE}" 
+parm2="{GRID_SIZE}" 
+Depth="{GRID_SIZE}" 
+StringType="GRB Nodes" 
+Transparency="0" 
+PixelSize="2" 
+ModelBrightness="0" 
+Antialias="1" 
+StrandNames="" 
+NodeNames="" 
+CustomModel="{voxel_data}" 
+SourceVersion="2023.20" >
+</custommodel>"""
 
-orig_stdout = sys.stdout
-try:
-    with open('atlas_v2.xmodel', 'w') as f:
-        sys.stdout = f
-        
-        print('<?xml version="1.0" encoding="UTF-8"?>')
-        print('<custommodel ')
-        
-        # Dynamic header generation
-        header = (f'name="Atlas v2" parm1="{totalSize}" parm2="{len(rings_config)}" '
-                  f'Depth="1" StringType="GRB Nodes" Transparency="0" PixelSize="2" '
-                  f'ModelBrightness="0" Antialias="1" StrandNames="" NodeNames="" CustomModel="')
-        
-        footer = '" SourceVersion="2023.20"  >'
-        
-        # Join all rows with semicolons
-        print(header + ";".join(sphere_rows) + footer)
-        print('</custommodel>')
-        
-finally:
-    sys.stdout = orig_stdout
-    print("xModel file created successfully.")
+with open('atlas_v2_3D.xmodel', 'w') as f:
+    f.write(xml_3d)
+print("-> atlas_v2_3D.xmodel created.")
 
+# FILE 2: 2D MATRIX
+total_rings = len(rings_config)
+xml_2d = f"""<?xml version="1.0" encoding="UTF-8"?>
+<custommodel 
+name="Atlas v2 2D" 
+parm1="{MATRIX_WIDTH}" 
+parm2="{total_rings}" 
+Depth="1" 
+StringType="GRB Nodes" 
+Transparency="0" 
+PixelSize="2" 
+ModelBrightness="0" 
+Antialias="1" 
+StrandNames="" 
+NodeNames="" 
+CustomModel="{matrix_data}" 
+SourceVersion="2023.20" >
+</custommodel>"""
 
-# --- WRITE CSV SUMMARY ---
+with open('atlas_v2_2D.xmodel', 'w') as f:
+    f.write(xml_2d)
+print("-> atlas_v2_2D.xmodel created.")
 
+# FILE 3: CSV
 try:
     with open('atlas_v2.csv', 'w') as f:
-        sys.stdout = f
-        
-        print("Ring,Direction,LED Count,Start Channel,End Channel")
-        
-        # Reset counter for CSV reporting logic to match the generation order
-        # Note: If flipped vertically, the physical order might look different,
-        # but here we list them by Ring ID logic.
-        
+        f.write("Ring,Direction,LED Count,Start Channel,End Channel\n")
         report_led = 1
         for ring_num in sorted(rings_config.keys()):
             count, is_reversed = rings_config[ring_num]
-            
             direction_str = "Reverse ( <--- )" if is_reversed else "Normal ( ---> )"
             end_led = report_led + count - 1
-            
-            print(f"{ring_num},{direction_str},{count},{report_led},{end_led}")
-            
+            f.write(f"{ring_num},{direction_str},{count},{report_led},{end_led}\n")
             report_led += count
-
-finally:
-    sys.stdout = orig_stdout
-    print("CSV file created successfully.")
+    print("-> atlas_v2.csv created.")
+except Exception as e:
+    print(f"Error: {e}")
